@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Моніторинг: БПЛА та ракети</title>
+<meta name="description" content="Демонстраційна карта траєкторій БПЛА та ракет. Дані синтетичні.">
+
+<!-- Open Graph для красивых превью в Telegram/Twitter -->
+<meta property="og:title" content="Моніторинг: БПЛА та ракети">
+<meta property="og:description" content="Демонстраційна карта траєкторій. Дані синтетичні, не для реального використання.">
+<meta property="og:type" content="website">
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+
+<style>
+  :root {
+    --bg: #0a0e17;
+    --panel: rgba(10,14,23,0.92);
+    --border: #2a3a55;
+    --text: #e0e0e0;
+    --muted: #6a7a99;
+    --drone: #ffcc00;
+    --missile: #ff4444;
+    --ballistic: #ff00aa;
+    --impact: #ff0033;
+    --ok: #00ff88;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, monospace;
+    overflow: hidden;
+  }
+  #map { position: absolute; inset: 0; background: var(--bg); }
+
+  /* Верхняя плашка */
+  .topbar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
+    background: linear-gradient(180deg, rgba(10,14,23,0.95), rgba(10,14,23,0.7));
+    border-bottom: 1px solid var(--border);
+    padding: 8px 14px; display: flex; align-items: center; gap: 14px;
+    font-size: 13px;
+  }
+  .topbar .title { font-weight: 700; color: var(--impact); letter-spacing: 1px; }
+  .topbar .demo-badge {
+    background: #4a1a1a; color: #ff9999; padding: 2px 8px;
+    border-radius: 4px; font-size: 11px; border: 1px solid #7a2a2a;
+  }
+  .topbar .clock { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* Правая панель */
+  .panel {
+    position: absolute; top: 46px; right: 10px; z-index: 1000;
+    background: var(--panel); color: var(--text);
+    padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);
+    font-size: 13px; width: 300px; max-height: calc(100vh - 120px);
+    overflow-y: auto; backdrop-filter: blur(6px);
+  }
+  .panel h3 {
+    margin: 0 0 8px; color: var(--impact); font-size: 12px;
+    letter-spacing: 1.5px; text-transform: uppercase;
+  }
+  .panel h3.muted { color: var(--muted); margin-top: 14px; }
+
+  .log-entry {
+    padding: 5px 0; border-bottom: 1px solid #1a2233;
+    font-size: 12px; line-height: 1.35;
+  }
+  .log-entry:last-child { border-bottom: none; }
+  .log-entry .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .drone-t { color: var(--drone); }
+  .missile-t { color: var(--missile); }
+  .ballistic-t { color: var(--ballistic); }
+
+  /* Легенда */
+  .legend {
+    position: absolute; bottom: 10px; left: 10px; z-index: 1000;
+    background: var(--panel); padding: 10px 14px; border-radius: 8px;
+    border: 1px solid var(--border); font-size: 12px;
+    backdrop-filter: blur(6px);
+  }
+  .legend div { margin: 4px 0; display: flex; align-items: center; gap: 8px; }
+  .dot {
+    display: inline-block; width: 10px; height: 10px;
+    border-radius: 50%; box-shadow: 0 0 6px currentColor;
+    background: currentColor;
+  }
+
+  /* Кнопки управления */
+  .controls {
+    position: absolute; bottom: 10px; right: 10px; z-index: 1000;
+    display: flex; gap: 6px;
+  }
+  .controls button {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); padding: 8px 12px;
+    border-radius: 6px; cursor: pointer; font-size: 12px;
+    font-family: inherit;
+  }
+  .controls button:hover { background: #16202f; }
+  .controls button:active { transform: scale(0.97); }
+
+  /* Маркеры */
+  .marker-drone, .marker-missile, .marker-ballistic {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: #000;
+    border-radius: 50%; box-shadow: 0 0 12px currentColor;
+  }
+  .pulse {
+    animation: pulse 1.2s infinite;
+    background: var(--impact); box-shadow: 0 0 22px var(--impact);
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.7); opacity: 0.35; }
+  }
+
+  /* Мобильная адаптация */
+  @media (max-width: 700px) {
+    .panel { width: calc(100vw - 20px); max-height: 45vh; top: auto; bottom: 60px; }
+    .legend { display: none; }
+    .topbar .clock { display: none; }
+  }
+
+  /* Скроллбар */
+  .panel::-webkit-scrollbar { width: 6px; }
+  .panel::-webkit-scrollbar-thumb { background: #2a3a55; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="topbar">
+  <span class="title">⚠ МОНІТОРИНГ ПОВІТРЯНИХ ЦІЛЕЙ</span>
+  <span class="demo-badge">DEMO · СИНТЕТИЧНІ ДАНІ</span>
+  <span class="clock" id="clock">--:--:--</span>
+</div>
+
+<div class="panel">
+  <h3>Активні цілі</h3>
+  <div id="targets"><div style="color:#556;">Немає активних цілей</div></div>
+  <h3 class="muted">Історія (24 год)</h3>
+  <div id="log"></div>
+</div>
+
+<div class="legend">
+  <div style="color: var(--drone);"><span class="dot"></span>БПЛА (Shahed)</div>
+  <div style="color: var(--missile);"><span class="dot"></span>Крилата ракета</div>
+  <div style="color: var(--ballistic);"><span class="dot"></span>Балістика / Циркон</div>
+  <div style="color: var(--ok);"><span class="dot"></span>Перехоплено</div>
+</div>
+
+<div class="controls">
+  <button id="btn-restart" title="Перезапустить демонстрацию">↻ Рестарт</button>
+  <button id="btn-clear" title="Очистить историю">✕ Історія</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+<script>
+/* =========================================================
+   Ballistic Monitor — демонстраційна карта траєкторій
+   Дані синтетичні. Не для реального використання.
+   ========================================================= */
+
+const CONFIG = {
+  TICK_MS: 500,               // шаг анимации
+  HISTORY_TTL_MS: 24*3600*1000,
+  MAX_LOG_ENTRIES: 200,
+  STORAGE_KEY: 'bm_history_v1',
+  PANEL_LOG_LIMIT: 60,
+  CITIES: {
+    kyiv:     { name: 'Київ',        coords: [50.4501, 30.5234] },
+    chernihiv:{ name: 'Чернігів',    coords: [51.4982, 31.2893] },
+    sumy:     { name: 'Суми',        coords: [50.9077, 34.7981] },
+    kharkiv:  { name: 'Харків',      coords: [49.9935, 36.2304] },
+    kursk:    { name: 'Курськ',      coords: [51.7373, 36.1874] },
+    crimea:   { name: 'Крим',        coords: [45.3453, 34.4997] },
+    chornom:  { name: 'Чорне море',  coords: [44.0000, 33.0000] }
+  }
+};
+
+// ==== КАРТА ====
+const map = L.map('map', {
+  center: [50.45, 31.5],
+  zoom: 7,
+  zoomControl: true,
+  preferCanvas: true,
+  worldCopyJump: true
+});
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+// ==== МАРШРУТЫ ДЕМО ====
+const TEMPLATES = [
+  {
+    type: 'drone', color: '#ffcc00', icon: '✈', label: 'Shahed-136 (Курськ)',
+    speed: 1.0, ttlAfterImpact: 40000,
+    path: [
+      [51.73, 35.00], [51.55, 34.60], [51.30, 34.10],
+      [51.05, 33.50], [50.80, 32.90], [50.65, 32.20],
+      [50.55, 31.60], [50.48, 31.05], [50.45, 30.52]
+    ]
+  },
+  {
+    type: 'missile', color: '#ff4444', icon: '▲', label: 'Крилата (Курськ → Київ)',
+    speed: 1.6, ttlAfterImpact: 40000,
+    path: [
+      [51.73, 35.00], [51.20, 34.20], [50.90, 33.40],
+      [50.70, 32.50], [50.55, 31.60], [50.45, 30.52]
+    ]
+  },
+  {
+    type: 'ballistic', color: '#ff00aa', icon: '◆', label: 'Циркон (Чорне море → Київ)',
+    speed: 2.4, ttlAfterImpact: 40000,
+    path: [
+      [44.00, 33.00], [45.50, 32.50], [47.00, 31.60],
+      [48.50, 31.00], [49.80, 30.70], [50.45, 30.52]
+    ]
+  },
+  {
+    type: 'drone', color: '#ffcc00', icon: '✈', label: 'Shahed (Суми → Чернігів)',
+    speed: 1.0, ttlAfterImpact: 40000,
+    path: [
+      [51.30, 34.80], [51.25, 34.20], [51.32, 33.50],
+      [51.40, 32.70], [51.48, 31.90], [51.50, 31.29]
+    ]
+  }
+];
+
+// ==== СОСТОЯНИЕ ====
+const active = new Map();   // id -> state
+const history = [];         // {time, text, cls}
+let targetSeq = 0;
+let tickTimer = null;
+let spawnTimer = null;
+let running = true;
+
+// ==== УТИЛИТЫ ====
+const els = {
+  targets: document.getElementById('targets'),
+  log: document.getElementById('log'),
+  clock: document.getElementById('clock')
+};
+
+function nowClock() {
+  els.clock.textContent = new Date().toLocaleTimeString('uk-UA');
+}
+setInterval(nowClock, 1000); nowClock();
+
+function makeIcon(color, glyph, impact=false) {
+  const cls = impact ? 'pulse' : '';
+  const size = impact ? 22 : 18;
+  const glyphHtml = impact ? '' : `<span>${glyph}</span>`;
+  return L.divIcon({
+    className: '',
+    html: `<div class="${cls}" style="
+        width:${size}px; height:${size}px;
+        border-radius:50%; background:${color};
+        color:${color}; display:flex; align-items:center;
+        justify-content:center; font-size:11px;
+        box-shadow:0 0 12px ${color};">${glyphHtml}</div>`,
+    iconSize: [size, size],
+    iconAnchor: [size/2, size/2]
+  });
+}
+
+// ==== ЖУРНАЛ ====
+function addLog(text, cls='') {
+  history.push({ time: Date.now(), text, cls });
+  while (history.length > CONFIG.MAX_LOG_ENTRIES) history.shift();
+  cleanupHistory();
+  persistHistory();
+  renderLog();
+}
+
+function cleanupHistory() {
+  const cutoff = Date.now() - CONFIG.HISTORY_TTL_MS;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].time < cutoff) history.splice(i, 1);
+  }
+}
+
+function renderLog() {
+  if (history.length === 0) {
+    els.log.innerHTML = '<div style="color:#556;font-size:12px;">Порожньо</div>';
+    return;
+  }
+  const slice = history.slice(-CONFIG.PANEL_LOG_LIMIT).reverse();
+  els.log.innerHTML = slice.map(e => {
+    const t = new Date(e.time).toLocaleTimeString('uk-UA');
+    return `<div class="log-entry">
+      <span class="t">[${t}]</span>
+      <span class="${e.cls}">${escapeHtml(e.text)}</span>
+    </div>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function persistHistory() {
+  try {
+    const cutoff = Date.now() - CONFIG.HISTORY_TTL_MS;
+    const fresh = history.filter(e => e.time > cutoff);
+    localStorage.setItem(CONFIG.STORAGE_KEY, JSON.stringify(fresh));
+  } catch(_) {}
+}
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(CONFIG.STORAGE_KEY);
+    if (!raw) return;
+    const cutoff = Date.now() - CONFIG.HISTORY_TTL_MS;
+    JSON.parse(raw).filter(e => e.time > cutoff).forEach(e => history.push(e));
+    renderLog();
+  } catch(_) {}
+}
+
+// ==== ЦЕЛИ ====
+function spawnTarget(template) {
+  const id = `t${++targetSeq}`;
+  const t = JSON.parse(JSON.stringify(template));
+  t.id = id;
+
+  const polyline = L.polyline([], {
+    color: t.color, weight: 2, opacity: 0.8,
+    dashArray: '6,6'
+  }).addTo(map);
+
+  const marker = L.marker(t.path[0], { icon: makeIcon(t.color, t.icon) })
+    .addTo(map)
+    .bindTooltip(t.label, { direction: 'top', offset: [0, -10] });
+
+  active.set(id, {
+    def: t, marker, polyline,
+    idx: 0,
+    trail: [t.path[0]],
+    progress: 0,
+    completed: false
+  });
+
+  addLog(`Виявлено: ${t.label}`, typeClass(t.type));
+  renderTargets();
+}
+
+function typeClass(type) {
+  return ({ drone:'drone-t', missile:'missile-t', ballistic:'ballistic-t' })[type] || '';
+}
+
+function step() {
+  active.forEach((s, id) => {
+    if (s.completed) return;
+    const { def, marker, polyline } = s;
+
+    // Плавное движение: накапливаем прогресс
+    s.progress += def.speed;
+    while (s.progress >= 1 && s.idx < def.path.length - 1) {
+      s.progress -= 1;
+      s.idx++;
+      const p = def.path[s.idx];
+      s.trail.push(p);
+    }
+
+    if (s.idx >= def.path.length - 1 && s.progress >= 0.99) {
+      // Достигли конца
+      s.completed = true;
+      const end = def.path[def.path.length - 1];
+      marker.setLatLng(end);
+      marker.setIcon(makeIcon('#ff0033', '', true));
+      addLog(`💥 ${def.label} — фіксація в районі цілі`, 'ballistic-t');
+      renderTargets();
+      setTimeout(() => removeTarget(id), def.ttlAfterImpact);
+      return;
+    }
+
+    // Интерполяция между текущей и следующей точкой
+    const a = def.path[s.idx];
+    const b = def.path[Math.min(s.idx + 1, def.path.length - 1)];
+    const lat = a[0] + (b[0] - a[0]) * s.progress;
+    const lng = a[1] + (b[1] - a[1]) * s.progress;
+    marker.setLatLng([lat, lng]);
+
+    // Трек — все пройденные точки + текущая
+    polyline.setLatLngs([...s.trail, [lat, lng]]);
+  });
+}
+
+function removeTarget(id) {
+  const s = active.get(id);
+  if (!s) return;
+  map.removeLayer(s.marker);
+  map.removeLayer(s.polyline);
+  active.delete(id);
+  renderTargets();
+}
+
+function renderTargets() {
+  if (active.size === 0) {
+    els.targets.innerHTML = '<div style="color:#556;font-size:12px;">Немає активних цілей</div>';
+    return;
+  }
+  els.targets.innerHTML = [...active.values()].map(s => {
+    const cls = typeClass(s.def.type);
+    const status = s.completed ? '💥' : '🛫';
+    const total = s.def.path.length - 1;
+    return `<div class="log-entry ${cls}">
+      ${status} ${escapeHtml(s.def.label)}
+      <span class="t"> — ${s.idx}/${total}</span>
+    </div>`;
+  }).join('');
+}
+
+// ==== УПРАВЛЕНИЕ ====
+function startDemo() {
+  stopDemo();
+  running = true;
+  // Первая волна
+  spawnTarget(TEMPLATES[0]);
+  setTimeout(() => spawnTarget(TEMPLATES[1]), 3000);
+  setTimeout(() => spawnTarget(TEMPLATES[2]), 8000);
+  setTimeout(() => spawnTarget(TEMPLATES[3]), 14000);
+
+  tickTimer = setInterval(step, CONFIG.TICK_MS);
+
+  // Периодические новые волны каждые 40 сек
+  spawnTimer = setInterval(() => {
+    if (!running) return;
+    const tpl = TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)];
+    spawnTarget(tpl);
+  }, 40000);
+}
+
+function stopDemo() {
+  running = false;
+  if (tickTimer) clearInterval(tickTimer), tickTimer = null;
+  if (spawnTimer) clearInterval(spawnTimer), spawnTimer = null;
+  active.forEach((_, id) => removeTarget(id));
+}
+
+// ==== КНОПКИ ====
+document.getElementById('btn-restart').addEventListener('click', () => {
+  startDemo();
+  addLog('↻ Демонстрацію перезапущено', 'missile-t');
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+  if (!confirm('Очистити історію?')) return;
+  history.length = 0;
+  persistHistory();
+  renderLog();
+});
+
+// ==== АВТООЧИСТКА ====
+setInterval(cleanupHistory, 60000);
+
+// ==== СТАРТ ====
+loadHistory();
+startDemo();
+
+// Периодически сохраняем
+setInterval(persistHistory, 15000);
+
+// ==== ДИСКЛЕЙМЕР В КОНСОЛИ ====
+console.log('%c⚠ DEMO', 'color:#ff4444;font-weight:bold;font-size:20px',
+  '\nДані синтетичні. Не використовуйте для реальних рішень.');
+</script>
+</body>
+</html>
